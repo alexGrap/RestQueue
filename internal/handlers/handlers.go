@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"github.com/gofiber/fiber/v2"
 	models "inter/internal"
 	"inter/internal/usecase"
@@ -12,12 +13,12 @@ type Server struct {
 	UseCase models.UseCase
 }
 
-func Fabric() models.Rest {
+func Fabric(countRoutine int, ctx context.Context, closeChan chan bool) models.Rest {
 	server := Server{}
 	server.Server = fiber.New()
 	server.Server.Post("create", server.Post)
 	server.Server.Get("get", server.Get)
-	server.UseCase = usecase.InitUseCase()
+	server.UseCase = usecase.InitUseCase(countRoutine, ctx, closeChan)
 	return &server
 }
 

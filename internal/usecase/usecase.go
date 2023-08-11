@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	models "inter/internal"
 	"sort"
 	"sync"
@@ -8,37 +9,53 @@ import (
 )
 
 type UseCase struct {
-	InMemory map[int]*models.Task
+	InMemory            map[int]*models.Task
+	CountOfGoingRoutine int
+	Queue               []int
+	ctx                 *context.Context
+	LengthQueue         int
+	Mutex               sync.RWMutex
+	Current             int
 }
 
-var CountOfGoingRoutine int
-
-var queue []int
-var lengthQueue int
-
-func InitUseCase() models.UseCase {
+func InitUseCase(countRoutine int, ctx context.Context, closeChan chan bool) models.UseCase {
 	useCase := UseCase{}
-	lengthQueue = 0
+	useCase.LengthQueue = 0
+	useCase.Current = 0
+	useCase.CountOfGoingRoutine = countRoutine
 	useCase.InMemory = make(map[int]*models.Task)
+	go useCase.handleStarter(ctx, closeChan)
 	return &useCase
 }
 
 func (useCase *UseCase) Create(task models.Task) {
-	var mutex sync.Mutex
-	appender := func(position int, mutex *sync.Mutex) {
-		mutex.Lock()
-		queue = append(queue, position)
-		mutex.Unlock()
+	operator := func(task *models.Task) {
+		useCase.Mutex.Lock()
+		task.Status = "In queue"
+		task.Place = useCase.Current
+		useCase.Current++
+		task.CreationTime = time.Now().Format("15:04:05 02.01.2006")
+		useCase.InMemory[task.Place] = task
+		useCase.Queue = append(useCase.Queue, task.Place)
+		useCase.LengthQueue++
+		useCase.Mutex.Unlock()
 	}
-	task.Place = len(useCase.InMemory)
-	lengthQueue += 1
-	task.Status = "In queue"
-	task.CreationTime = time.Now().Format("15:04:05 02.01.2006")
-	useCase.InMemory[task.Place] = &task
-	appender(task.Place, &mutex)
-	if lengthQueue >= CountOfGoingRoutine {
-		go useCase.Handle()
-		lengthQueue -= CountOfGoingRoutine
+	operator(&task)
+}
+
+func (useCase *UseCase) handleStarter(ctx context.Context, closeChan chan bool) {
+	var mutex sync.Mutex
+	for {
+		select {
+		case <-ctx.Done():
+			closeChan <- true
+			return
+		default:
+			if useCase.LengthQueue >= useCase.CountOfGoingRoutine {
+				go useCase.Handle(&mutex)
+				useCase.LengthQueue -= useCase.CountOfGoingRoutine
+			}
+		}
 	}
 }
 
@@ -53,41 +70,47 @@ func (useCase *UseCase) Get() []models.Task {
 	return result
 }
 
-func (useCase *UseCase) Handle() {
+func (useCase *UseCase) Handle(mut *sync.Mutex) {
+	mut.Lock()
 	var wg sync.WaitGroup
-	sort.Slice(queue, func(i, j int) bool {
-		return queue[i] < queue[j]
+	sort.Slice(useCase.Queue, func(i, j int) bool {
+		return useCase.Queue[i] < useCase.Queue[j]
 	})
-	operationFunc := func(body *models.Task) {
-		defer wg.Done()
-		body.Status = "On going"
-		body.StartTime = time.Now().Format("15:04:05 02.01.2006")
-		currentValue := body.StartElement
-		for i := 0; i < body.ElementCount; i++ {
-			currentValue += body.Delta
-			time.Sleep(time.Duration(int(body.L*1000)) * time.Millisecond)
-		}
-		body.Status = "Done"
-		TTL := time.Duration(int(body.L*1000)) * time.Millisecond
-		timer := time.AfterFunc(TTL, func() {
-			delete(useCase.InMemory, body.Place)
-		})
-		defer timer.Stop()
-	}
-	wg.Add(CountOfGoingRoutine)
-	for i := 0; i < CountOfGoingRoutine; i++ {
-		go operationFunc(useCase.InMemory[queue[i]])
 
+	for i := 0; i < useCase.CountOfGoingRoutine; i++ {
+		go useCase.onGoingOperation(useCase.InMemory[useCase.Queue[i]], &wg)
+		wg.Add(1)
 	}
 	wg.Wait()
-	deleter()
+	var deleteMutex sync.Mutex
+	useCase.Deleter(&deleteMutex)
+	mut.Unlock()
 }
 
-func deleter() {
-	if len(queue) == CountOfGoingRoutine {
-		queue = nil
+func (useCase *UseCase) Deleter(mutex *sync.Mutex) {
+	mutex.Lock()
+	if len(useCase.Queue) == useCase.CountOfGoingRoutine {
+		useCase.Queue = nil
+		return
+	} else if len(useCase.Queue) < useCase.CountOfGoingRoutine {
+		mutex.Unlock()
 		return
 	}
-	copy(queue[:CountOfGoingRoutine], queue[CountOfGoingRoutine:])
-	queue = queue[:len(queue)-CountOfGoingRoutine]
+	copy(useCase.Queue[:useCase.CountOfGoingRoutine], useCase.Queue[useCase.CountOfGoingRoutine:])
+	useCase.Queue = useCase.Queue[useCase.CountOfGoingRoutine:]
+	mutex.Unlock()
+}
+
+func (useCase *UseCase) onGoingOperation(body *models.Task, wg *sync.WaitGroup) {
+	body.Status = "On going"
+	body.StartTime = time.Now().Format("15:04:05 02.01.2006")
+	currentValue := body.StartElement
+	for i := 0; i < body.ElementCount; i++ {
+		currentValue += body.Delta
+		body.Iteration = i
+		time.Sleep(time.Duration(int(body.L*1000)) * time.Millisecond)
+	}
+	body.Status = "Done"
+	body.EndTime = time.Now().Format("15:04:05 02.01.2006")
+	wg.Done()
 }

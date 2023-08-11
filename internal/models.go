@@ -7,7 +7,6 @@ import (
 type UseCase interface {
 	Create(task Task)
 	Get() []Task
-	Handle()
 }
 
 type Rest interface {
