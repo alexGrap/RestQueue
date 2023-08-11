@@ -1,7 +1,7 @@
 package models
 
 import (
-	"github.com/gofiber/fiber/v2"
+	"net/http"
 )
 
 type UseCase interface {
@@ -11,8 +11,8 @@ type UseCase interface {
 
 type Rest interface {
 	Hearing() error
-	Post(ctx *fiber.Ctx) error
-	Get(ctx *fiber.Ctx) error
+	Post(w http.ResponseWriter, r *http.Request)
+	Get(w http.ResponseWriter, r *http.Request)
 }
 
 type Task struct {

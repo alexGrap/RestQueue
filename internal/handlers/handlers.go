@@ -2,45 +2,64 @@ package handlers
 
 import (
 	"context"
-	"github.com/gofiber/fiber/v2"
+	"encoding/json"
+	"github.com/gorilla/mux"
 	models "inter/internal"
+	"inter/internal/middleware"
 	"inter/internal/usecase"
+	"io"
 	"log"
+	"net/http"
 )
 
 type Server struct {
-	Server  *fiber.App
+	Server  *mux.Router
 	UseCase models.UseCase
 }
 
 func Fabric(countRoutine int, ctx context.Context, closeChan chan bool) models.Rest {
 	server := Server{}
-	server.Server = fiber.New()
-	server.Server.Post("create", server.Post)
-	server.Server.Get("get", server.Get)
+	server.Server = mux.NewRouter().StrictSlash(true)
+	server.Server.HandleFunc("/create", server.Post).Methods("POST")
+	server.Server.HandleFunc("/get", server.Get).Methods("GET")
 	server.UseCase = usecase.InitUseCase(countRoutine, ctx, closeChan)
 	return &server
 }
 
 func (server *Server) Hearing() error {
-	err := server.Server.Listen(":3000")
-	if err != nil {
-		log.Fatal(err)
-	}
+	log.Println("Server started on :3000")
+	log.Fatal(http.ListenAndServe(":3000", server.Server))
 	return nil
 }
 
-func (server *Server) Post(ctx *fiber.Ctx) error {
+func (server *Server) Post(w http.ResponseWriter, r *http.Request) {
 	var body models.Task
-	if err := ctx.BodyParser(&body); err != nil {
-		ctx.Status(400)
-		return ctx.JSON(err.Error())
+	requestBody, _ := io.ReadAll(r.Body)
+	err := json.Unmarshal(requestBody, &body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		err = json.NewEncoder(w).Encode(err)
+		return
+	}
+	if !middleware.Validation(body) {
+		w.WriteHeader(http.StatusBadRequest)
+		err = json.NewEncoder(w).Encode(err)
+		return
 	}
 	server.UseCase.Create(body)
-	return ctx.SendStatus(200)
+	w.WriteHeader(http.StatusCreated)
+	err = json.NewEncoder(w).Encode("Note is was created")
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
-func (server *Server) Get(ctx *fiber.Ctx) error {
+func (server *Server) Get(w http.ResponseWriter, r *http.Request) {
 	result := server.UseCase.Get()
-	return ctx.JSON(result)
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(result)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		err = json.NewEncoder(w).Encode(err)
+	}
 }
